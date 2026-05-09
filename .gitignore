@@ -1,0 +1,13 @@
+.DS_Store
+.env
+.env.local
+.claude
+.mcp.json
+.venv/
+__pycache__/
+*.pyc
+state/
+evidence/
+*.log
+node_modules/
+.next/
