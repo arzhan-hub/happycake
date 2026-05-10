@@ -67,22 +67,32 @@ cp .env.example .env
 # 5. Public tunnel (required — the simulator forwards inbounds here)
 brew install cloudflared
 cloudflared tunnel --url http://localhost:8080 --no-autoupdate
-# Copy the printed https://*.trycloudflare.com URL into .env as PUBLIC_WEBHOOK_BASE_URL,
-# then register it with the simulator (full path matters):
-#   mcp__happycake__whatsapp_register_webhook  url=https://<sub>.trycloudflare.com/webhooks/whatsapp
-#   mcp__happycake__instagram_register_webhook url=https://<sub>.trycloudflare.com/webhooks/instagram
+# Copy the printed https://*.trycloudflare.com URL.
 
-# 6. Drive a fake customer turn (in another terminal)
+# 6. Put the tunnel URL in .env, then register both webhooks with the MCP
+#    (run this every time cloudflared restarts — quick-tunnel URLs rotate)
+echo 'PUBLIC_WEBHOOK_BASE_URL=https://<your-sub>.trycloudflare.com' >> .env
+.venv/bin/python scripts/register_webhooks.py
+# Expected output (one line per channel):
+#   [whatsapp]  https://<sub>.trycloudflare.com/webhooks/whatsapp
+#      → Webhook registered. We will forward inbound WhatsApp events ...
+#   [instagram] https://<sub>.trycloudflare.com/webhooks/instagram
+#      → Webhook registered. We will forward inbound Instagram events ...
+
+# 7. Drive a fake customer turn (in another terminal)
 .venv/bin/python scripts/demo_inbound.py \
   --from +12679883724 \
   --message "Hi, do you have a whole honey cake today?"
+# Expected MCP response: "... forwarded to webhook (status 200)."
+# If you see "webhook forward failed: undefined", the registered URL is stale —
+# rerun step 6 with the current cloudflared URL.
 ```
 
 Visit `http://localhost:8080/` for a list of endpoints.
 
-⚠️ Cloudflare quick-tunnel URLs rotate on every `cloudflared` restart —
-re-export `PUBLIC_WEBHOOK_BASE_URL` and re-call the `*_register_webhook` tools
-when you reconnect.
+⚠️ Cloudflare quick-tunnel URLs rotate on every `cloudflared` restart. After
+restarting the tunnel: update `PUBLIC_WEBHOOK_BASE_URL` in `.env` and rerun
+`scripts/register_webhooks.py`.
 
 ## Telegram owner bot
 
