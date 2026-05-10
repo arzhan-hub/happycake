@@ -63,6 +63,7 @@ async def root() -> dict:
             "POST /webhooks/whatsapp",
             "GET  /webhooks/whatsapp/health",
             "POST /api/orders",
+            "POST /api/chat",
             "GET  /api/catalog",
             "GET  /api/health",
         ],

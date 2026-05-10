@@ -65,3 +65,31 @@ class WebsiteOrderErrorResponse(BaseModel):
     ]
     message: str
     earliest_pickup_at: str | None = None
+
+
+# ─── on-site chat (Saule) ────────────────────────────────────────────────
+
+
+class ChatHistoryEntry(BaseModel):
+    role: Literal["user", "agent"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[ChatHistoryEntry] = Field(default_factory=list, max_length=40)
+
+
+class ChatResponse(BaseModel):
+    ok: Literal[True] = True
+    reply: str
+    escalated: bool = False
+    escalation_type: str | None = None
+    num_turns: int | None = None
+    duration_ms: int | None = None
+
+
+class ChatErrorResponse(BaseModel):
+    ok: Literal[False] = False
+    error: str
+    message: str

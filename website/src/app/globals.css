@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+:root {
+  --background: #FBF6E8; /* cream-50 */
+  --foreground: #1A1816; /* text-primary */
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  
+  /* Happy Cake Brand Palette */
+  --color-happy-blue-900: #0E2A3C;
+  --color-happy-blue-700: #1B4868;
+  --color-happy-blue-500: #3B7BA8;
+  --color-happy-blue-200: #BFD8E8;
+  --color-cream-50: #FBF6E8;
+  --color-cream-100: #F4ECD3;
+  --color-cream-200: #E9DBB4;
+  --color-accent-coral: #E08066;
+  --color-accent-green: #6E9D74;
+  
+  --color-text-primary: #1A1816;
+  --color-text-on-blue: #FBF6E8;
+
+  --font-display: "Cormorant Garamond", serif;
+  --font-body: "Inter", sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body);
+}

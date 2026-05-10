@@ -3,13 +3,18 @@ from __future__ import annotations
 import logging
 
 from src.config import settings
-from src.shared.claude_runner import OWNER_ALLOWED_TOOLS, run_claude
+from src.shared.claude_runner import (
+    CHAT_ALLOWED_TOOLS,
+    OWNER_ALLOWED_TOOLS,
+    run_claude,
+)
 from src.whatsapp.schemas import WhatsAppInbound
 
 logger = logging.getLogger("agent")
 
 _SALES_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "sales.md"
 _OWNER_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "owner_assistant.md"
+_CHAT_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "onsite_chat.md"
 
 
 def _load_sales_prompt() -> str:
@@ -18,6 +23,10 @@ def _load_sales_prompt() -> str:
 
 def _load_owner_prompt() -> str:
     return _OWNER_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _load_chat_prompt() -> str:
+    return _CHAT_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 async def process_whatsapp_inbound(ib: WhatsAppInbound) -> dict:
@@ -77,6 +86,48 @@ End your final summary with one sentence describing what you did, then on its ow
 <the verbatim message body you sent via whatsapp_send — paste the text directly, no quote markers, no `>` prefixes>
 ```
 """
+
+
+async def process_chat_message(message: str, history: list[dict] | None = None) -> dict:
+    """On-site chat assistant turn ('Saule' on the storefront chat widget).
+
+    `history` is the prior conversation as `[{role: "user"|"agent", content: str}, ...]`.
+    Read-only MCP tools only. Returns the same JSON shape as the other passes.
+    """
+    history = history or []
+    formatted_history = "\n".join(
+        f"{'Customer' if h.get('role') == 'user' else 'Saule (you)'}: {h.get('content', '')}"
+        for h in history
+        if h.get("content")
+    ) or "(no prior turns in this session)"
+
+    prompt = f"""{_load_chat_prompt()}
+
+---
+
+PREVIOUS CONVERSATION HISTORY
+-----------------------------
+{formatted_history}
+
+CURRENT CUSTOMER MESSAGE
+------------------------
+\"\"\"{message}\"\"\"
+
+Use the read-only MCP tools as needed. Reply concisely. End with the
+required `📩 Reply sent to customer:` block, and (if applicable) the
+`ESCALATE_TO_OWNER:<type>` marker plus its structured brief.
+"""
+    result = await run_claude(
+        prompt,
+        allowed_tools=CHAT_ALLOWED_TOOLS,
+        max_turns=10,
+        timeout_seconds=120.0,
+    )
+    if result.get("is_error"):
+        logger.error("chat turn failed: %s", result.get("error"))
+    else:
+        logger.info("chat turn ok turns=%s", result.get("num_turns"))
+    return result
 
 
 async def process_owner_message(message: str) -> dict:

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Image Test</title>
+  <style>
+    img { max-width: 300px; display: block; margin-bottom: 20px; }
+    h2 { font-family: sans-serif; }
+  </style>
+</head>
+<body>
+  <h1>Product Images</h1>
+  <script>
+    for (let i = 1; i <= 10; i++) {
+      let num = i.toString().padStart(2, '0');
+      document.write(`<h2>Image ${num}</h2>`);
+      document.write(`<img src="https://www.steppebusinessclub.com/hackathon-assets/happy-cake/products/happy-cake-product-${num}.webp" />`);
+    }
+  </script>
+</body>
+</html>

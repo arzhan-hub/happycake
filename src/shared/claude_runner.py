@@ -54,6 +54,22 @@ OWNER_ALLOWED_TOOLS = [
 ]
 
 
+# Read-only MCP tools the on-site chat assistant (Saule on the storefront)
+# is allowed to call. No write tools — chat does not create orders or send
+# WhatsApp messages. Order placement happens via the order form (which goes
+# through /api/orders); escalations happen via the ESCALATE_TO_OWNER marker.
+CHAT_ALLOWED_TOOLS = [
+    "mcp__happycake__square_list_catalog",
+    "mcp__happycake__square_get_inventory",
+    "mcp__happycake__square_recent_orders",
+    "mcp__happycake__square_get_pos_summary",
+    "mcp__happycake__kitchen_get_capacity",
+    "mcp__happycake__kitchen_get_menu_constraints",
+    "mcp__happycake__kitchen_list_tickets",
+    "mcp__happycake__kitchen_get_production_summary",
+]
+
+
 async def run_claude(
     prompt: str,
     max_turns: int = 12,

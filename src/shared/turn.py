@@ -221,6 +221,91 @@ async def run_inbound_turn(ib: WhatsAppInbound) -> None:
         logger.warning("telegram push failed", exc_info=True)
 
 
+_ESCALATE_RE = re.compile(r"ESCALATE_TO_OWNER:([a-z_]+)")
+
+
+def _detect_escalation(summary: str) -> str | None:
+    if not summary:
+        return None
+    m = _ESCALATE_RE.search(summary)
+    return m.group(1) if m else None
+
+
+def _format_escalation_message(escalation_type: str, summary: str) -> str:
+    """Build the Telegram FYI text for a chat-side escalation.
+
+    The agent's summary contains the brief in the format defined in
+    onsite_chat.md. We strip the marker line itself and pass the rest
+    through the markdown→HTML converter.
+    """
+    body = _ESCALATE_RE.sub("", summary, count=1).strip()
+    body_html = to_telegram_html(body)
+    type_label = {
+        "custom_order": "Custom-cake request",
+        "complaint": "Customer complaint",
+        "order_problem": "Order problem",
+    }.get(escalation_type, f"Chat escalation ({escalation_type})")
+    return (
+        f"⚠️ <b>Chat escalation — {type_label}</b>\n"
+        "\n"
+        f"{body_html[:3500]}"
+    )
+
+
+async def run_chat_turn(message: str, history: list[dict] | None = None) -> dict:
+    """On-site chat (Saule) turn.
+
+    Returns the raw claude result. Caller (storefront /api/chat proxy via
+    our /api/chat) reads `result.result` for the agent's text. We persist
+    evidence per-turn and (if escalation marker present) push a Telegram
+    FYI to the owner.
+    """
+    started = datetime.now(timezone.utc).isoformat()
+    try:
+        result = await agent.process_chat_message(message, history)
+    except Exception as exc:
+        logger.exception("chat turn crashed")
+        result = {"is_error": True, "error": f"crash: {exc!r}"}
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    out_path = _write_evidence(
+        kind="chat",
+        key=ts,
+        payload={
+            "started": started,
+            "finished": datetime.now(timezone.utc).isoformat(),
+            "asked": message,
+            "history": history or [],
+            "result": result,
+        },
+    )
+    logger.info("chat evidence -> %s", out_path)
+
+    summary = (result.get("result") or "").strip()
+    escalation = _detect_escalation(summary) if not result.get("is_error") else None
+    if escalation:
+        # Persist a separate escalation record so the evaluator can grep
+        esc_path = _write_evidence(
+            kind="escalations",
+            key=f"{ts}_{escalation}",
+            payload={
+                "type": escalation,
+                "asked": message,
+                "summary": summary,
+                "ts": started,
+            },
+        )
+        logger.info("escalation [%s] -> %s", escalation, esc_path)
+        try:
+            await notifier.notify_owner(
+                _format_escalation_message(escalation, summary)
+            )
+        except Exception:
+            logger.warning("escalation push failed", exc_info=True)
+
+    return result
+
+
 async def run_owner_chat_turn(text: str) -> dict:
     """Owner-chat: caller (bot handler) manages the placeholder message UX.
 
