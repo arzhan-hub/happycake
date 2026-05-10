@@ -44,11 +44,6 @@ needs the cloudflare tunnel up and the webhook registered with the **full path**
 (see *Manual smoke test* below). `scripts/demo_inbound.py` is a thin wrapper
 that just calls the inject tool — the simulator does the forwarding.
 
-> Earlier in development the simulator did not forward `inject_inbound` events
-> to registered webhooks; we worked around it with a parallel POST. That has
-> since been fixed on the simulator side, and the parallel POST has been
-> removed.
-
 ## Setup from a fresh clone
 
 ```bash
@@ -301,18 +296,40 @@ simulator ever starts forwarding real webhooks, our schema already matches.
 
 ## Build status
 
+**Plumbing**
 - [x] MCP entity chain validated end-to-end (`MCP_DRY_RUN.md`)
-- [x] FastAPI skeleton + raw webhook discovery endpoint
-- [x] Cloudflare tunnel verified + webhook semantics discovered
-- [x] Dual-fanout demo driver (`scripts/demo_inbound.py`)
-- [ ] `claude -p` subprocess runner (`src/shared/claude_runner.py`)
-- [ ] Thread store + evidence logger
-- [ ] Sales agent system prompt (brand voice + tool chain + approval rules)
-- [ ] End-to-end happy path test (inbound → claude → reply → evidence)
-- [ ] Telegram bots (sales / kitchen / marketing)
-- [ ] Next.js storefront on `happycake.us`
-- [ ] Marketing $500 / month budget plan generator
+- [x] FastAPI wrapper + WhatsApp + Instagram + storefront webhook routers
+- [x] Cloudflare tunnel + simulator-forward path working end-to-end
+- [x] Demo driver `scripts/demo_inbound.py` (calls `whatsapp_inject_inbound`)
+- [x] `claude -p` subprocess runner with per-agent allowed-tools lists
+      (`src/shared/claude_runner.py`)
+- [x] Thread store + per-turn evidence logger (`evidence/turns/...`,
+      `evidence/webhooks/...`, `evidence/website_orders/...`)
 
+**Agents**
+- [x] WhatsApp sales agent — `agent/system_prompts/sales.md` (brand rules,
+      10-step tool chain incl. inventory check, capacity-aware accept/reject,
+      Pass-1 + Pass-2 approval flow)
+- [x] Instagram DM agent — `agent/system_prompts/instagram_dm.md`
+- [x] Instagram post drafter — `agent/system_prompts/instagram_post.md`
+      (owner-triggered via `/post` in Telegram)
+- [x] On-site chat assistant "Saule" — `agent/system_prompts/onsite_chat.md`
+      with 5-scenario test script `scripts/test_chat.py`
+- [x] Owner assistant — `agent/system_prompts/owner_assistant.md`
+      (free-text Q&A in Telegram)
 
+**Surfaces**
+- [x] Next.js storefront with `/api/orders` validation pipeline
+      (`src/website/orders.py`: catalog/constraints/capacity, decoration-keyword
+      gate, approval branch)
+- [x] Telegram owner bot — turn pushes, approval buttons, `/status`, `/post`
+      (`src/telegram_bot/`)
+- [x] Marketing loop scaffolding — `marketing/plan.md`,
+      `marketing/run-loop.mjs`, `marketing/mcp-client.mjs`
 
-https://happens-sip-cabin-carroll.trycloudflare.com
+**Verification**
+- [x] End-to-end happy path: inbound → forward → wrapper → claude → MCP write
+      tools → reply → evidence (verified this session, e.g.
+      `evidence/turns/12679883725/wamid.1778422605.a0i4u9.json`)
+- [x] On-site chat test script passing all 5 scenarios
+      (consultation / custom_order / complaint / status / general_question)
