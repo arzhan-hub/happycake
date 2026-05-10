@@ -146,6 +146,46 @@ ps aux | grep uvicorn | grep -v grep
 # 3. Trigger a turn and watch Telegram for the "✅ Customer turn handled" card.
 ```
 
+## Storefront (Next.js)
+
+The customer-facing site lives at [`website/`](./website/) and runs as a
+**separate Node process**. It does no AI itself — its server-side API routes
+proxy to the FastAPI wrapper:
+
+| Storefront route | Proxies to wrapper | Purpose |
+|---|---|---|
+| `POST /api/order` | `POST /api/orders` | Order form submission (catalog/capacity validation + write tools or owner approval) |
+| `POST /api/agent` | `POST /api/chat` | On-site chat widget (Saule) |
+| `GET /api/products` | *(static)* | Machine-readable product feed for agent consumers (brief §3) |
+| `GET /llms.txt` | *(static)* | Site description for LLM crawlers |
+
+### Setup + run
+
+```bash
+cd website
+cp .env.local.example .env.local
+# Edit .env.local: set WRAPPER_BASE_URL to your cloudflare tunnel URL
+# (the same value as PUBLIC_WEBHOOK_BASE_URL in the parent .env).
+
+npm install
+npm run dev
+# → http://localhost:3000
+```
+
+Production build:
+
+```bash
+npm run build && npm run start    # serves on :3000
+```
+
+⚠️ When the cloudflare tunnel rotates, update **both**
+`../.env:PUBLIC_WEBHOOK_BASE_URL` and `website/.env.local:WRAPPER_BASE_URL`
+to the new URL, then rerun `scripts/register_webhooks.py` and restart
+`npm run dev`. (The Next.js server reads `.env.local` at boot.)
+
+See [`website/README.md`](./website/README.md) for the page list and
+internal layout.
+
 ## Manual smoke test (no demo driver)
 
 Useful when debugging the inbound → wrapper → agent → Telegram pipeline by
