@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 
 from src.config import settings
 from src.shared import approvals
-from src.shared.turn import run_approval_turn
+from src.shared.turn import run_approval_turn, run_owner_chat_turn, to_telegram_html
 from src.telegram_bot.owner import load_owner_chat_id, save_owner_chat_id
 
 logger = logging.getLogger("telegram_bot")
@@ -52,6 +52,54 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"• audit calls: {counts.get('auditCalls', 0)}",
     ]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def owner_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Free-text from the owner chat → claude -p (owner assistant) → answer.
+
+    Implements brief §5: 'Telegram bots invoke `claude -p` ... and stream the
+    answer back into Telegram.' We send a 'Thinking…' placeholder, run the
+    agent, then edit the placeholder with the final answer.
+    """
+    chat_id = update.effective_chat.id
+    if chat_id != load_owner_chat_id():
+        return  # silent — only the owner gets agent answers
+
+    msg = (update.message.text or "").strip()
+    if not msg:
+        return
+
+    placeholder = await update.message.reply_text("🤔 Thinking…")
+    try:
+        result = await run_owner_chat_turn(msg)
+    except Exception as exc:
+        await placeholder.edit_text(f"⚠️ Crashed: {exc!r}")
+        return
+
+    if result.get("is_error"):
+        await placeholder.edit_text(
+            f"⚠️ Couldn't answer — {result.get('error', 'unknown error')}"
+        )
+        return
+
+    answer = (result.get("result") or "").strip() or "(no answer)"
+    answer_html = to_telegram_html(answer)
+
+    meta_bits = []
+    if result.get("num_turns") is not None:
+        meta_bits.append(f"{result['num_turns']} turns")
+    if result.get("duration_ms") is not None:
+        meta_bits.append(f"{result['duration_ms']/1000:.1f}s")
+    meta = f"\n\n<i>({' · '.join(meta_bits)})</i>" if meta_bits else ""
+
+    final = (answer_html + meta)[:4000]  # Telegram message limit ~4096
+    try:
+        await placeholder.edit_text(final, parse_mode="HTML")
+    except TelegramError:
+        try:
+            await placeholder.edit_text(answer + ("\n\n" + " · ".join(meta_bits) if meta_bits else ""))
+        except TelegramError as exc:
+            logger.warning("owner-chat reply failed: %s", exc)
 
 
 async def approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

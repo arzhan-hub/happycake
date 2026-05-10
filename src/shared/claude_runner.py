@@ -25,6 +25,35 @@ ALLOWED_TOOLS = [
 ]
 
 
+# Read-only tools the owner-assistant (Telegram bot chat) is allowed to call.
+# Writes are intentionally excluded — the owner can ask questions but not
+# accidentally trigger orders or messages from a chat session.
+OWNER_ALLOWED_TOOLS = [
+    "mcp__happycake__square_list_catalog",
+    "mcp__happycake__square_get_inventory",
+    "mcp__happycake__square_recent_orders",
+    "mcp__happycake__square_recent_sales_csv",
+    "mcp__happycake__square_get_pos_summary",
+    "mcp__happycake__kitchen_get_capacity",
+    "mcp__happycake__kitchen_get_menu_constraints",
+    "mcp__happycake__kitchen_list_tickets",
+    "mcp__happycake__kitchen_get_production_summary",
+    "mcp__happycake__whatsapp_list_threads",
+    "mcp__happycake__instagram_list_dm_threads",
+    "mcp__happycake__gb_list_reviews",
+    "mcp__happycake__gb_get_metrics",
+    "mcp__happycake__gb_list_simulated_actions",
+    "mcp__happycake__marketing_get_budget",
+    "mcp__happycake__marketing_get_campaign_metrics",
+    "mcp__happycake__marketing_get_margin_by_product",
+    "mcp__happycake__marketing_get_sales_history",
+    "mcp__happycake__world_get_scenarios",
+    "mcp__happycake__world_get_scenario_summary",
+    "mcp__happycake__world_get_timeline",
+    "mcp__happycake__evaluator_get_evidence_summary",
+]
+
+
 async def run_claude(
     prompt: str,
     max_turns: int = 12,

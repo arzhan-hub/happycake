@@ -3,16 +3,21 @@ from __future__ import annotations
 import logging
 
 from src.config import settings
-from src.shared.claude_runner import run_claude
+from src.shared.claude_runner import OWNER_ALLOWED_TOOLS, run_claude
 from src.whatsapp.schemas import WhatsAppInbound
 
 logger = logging.getLogger("agent")
 
 _SALES_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "sales.md"
+_OWNER_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "owner_assistant.md"
 
 
 def _load_sales_prompt() -> str:
     return _SALES_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _load_owner_prompt() -> str:
+    return _OWNER_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 async def process_whatsapp_inbound(ib: WhatsAppInbound) -> dict:
@@ -72,6 +77,34 @@ End your final summary with one sentence describing what you did, then on its ow
 <the verbatim message body you sent via whatsapp_send — paste the text directly, no quote markers, no `>` prefixes>
 ```
 """
+
+
+async def process_owner_message(message: str) -> dict:
+    """Owner-assistant turn: free-text from the Telegram owner chat.
+
+    Read-only MCP tools only. Returns the same JSON shape as the other
+    `process_*` calls (caller reads `result.result` for the agent's text).
+    """
+    prompt = f"""{_load_owner_prompt()}
+
+---
+
+The owner just sent you this message in Telegram:
+\"\"\"{message}\"\"\"
+
+Read whatever MCP tools you need to answer factually. Reply concisely.
+"""
+    result = await run_claude(
+        prompt,
+        allowed_tools=OWNER_ALLOWED_TOOLS,
+        max_turns=10,
+        timeout_seconds=120.0,
+    )
+    if result.get("is_error"):
+        logger.error("owner-chat failed: %s", result.get("error"))
+    else:
+        logger.info("owner-chat ok turns=%s", result.get("num_turns"))
+    return result
 
 
 async def process_approval_decision(approval: dict) -> dict:

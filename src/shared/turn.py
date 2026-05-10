@@ -31,7 +31,7 @@ _ITALIC_STAR_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<![A-Za-z0-9_])_([^_\n]+)_(?![A-Za-z0-9_])")
 
 
-def _to_html(text: str | None) -> str:
+def to_telegram_html(text: str | None) -> str:
     """Convert agent-emitted markdown to Telegram HTML.
 
     1. html-escape everything (so customer messages with `<` are safe).
@@ -94,7 +94,7 @@ def _format_meta_line(result: dict) -> str | None:
 def _format_pass1_message(ib: WhatsAppInbound, result: dict) -> str:
     is_error = result.get("is_error", False)
     err = result.get("error")
-    summary_html = _to_html((result.get("result") or "").strip()) or "<i>(no summary)</i>"
+    summary_html = to_telegram_html((result.get("result") or "").strip()) or "<i>(no summary)</i>"
     head = "🛑 <b>Agent error</b>" if is_error else "✅ <b>Customer turn handled</b>"
     lines = [
         head,
@@ -131,7 +131,7 @@ def _format_approval_request(ib: WhatsAppInbound, summary: str) -> str:
     marker = approvals.APPROVAL_MARKER
     if marker in body:
         body = body.split(marker, 1)[1].lstrip()
-    body_html = _to_html(body)
+    body_html = to_telegram_html(body)
     return (
         "⏳ <b>Approval needed — custom-work request</b>\n"
         "\n"
@@ -144,7 +144,7 @@ def _format_approval_request(ib: WhatsAppInbound, summary: str) -> str:
 
 def _format_pass2_message(approval: dict, result: dict) -> str:
     is_error = result.get("is_error", False)
-    summary_html = _to_html((result.get("result") or "").strip()) or "<i>(no summary)</i>"
+    summary_html = to_telegram_html((result.get("result") or "").strip()) or "<i>(no summary)</i>"
     decision = approval.get("status", "?").upper()
     if is_error:
         head = "🛑 <b>Pass 2 error</b>"
@@ -219,6 +219,34 @@ async def run_inbound_turn(ib: WhatsAppInbound) -> None:
         await notifier.notify_owner(_format_pass1_message(ib, result))
     except Exception:
         logger.warning("telegram push failed", exc_info=True)
+
+
+async def run_owner_chat_turn(text: str) -> dict:
+    """Owner-chat: caller (bot handler) manages the placeholder message UX.
+
+    Returns the raw claude result so the handler can edit-in the answer.
+    Persists evidence to evidence/owner_chat/<ts>.json.
+    """
+    started = datetime.now(timezone.utc).isoformat()
+    try:
+        result = await agent.process_owner_message(text)
+    except Exception as exc:
+        logger.exception("owner chat crashed")
+        result = {"is_error": True, "error": f"crash: {exc!r}"}
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    out_path = _write_evidence(
+        kind="owner_chat",
+        key=ts,
+        payload={
+            "started": started,
+            "finished": datetime.now(timezone.utc).isoformat(),
+            "asked": text,
+            "result": result,
+        },
+    )
+    logger.info("owner-chat evidence -> %s", out_path)
+    return result
 
 
 async def run_approval_turn(approval: dict) -> None:

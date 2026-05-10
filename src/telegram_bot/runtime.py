@@ -3,11 +3,22 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
 
 from src.config import settings
 from src.telegram_bot.app_state import get_app, set_app
-from src.telegram_bot.handlers import approval_callback, cmd_start, cmd_status
+from src.telegram_bot.handlers import (
+    approval_callback,
+    cmd_start,
+    cmd_status,
+    owner_message_handler,
+)
 
 logger = logging.getLogger("telegram_bot")
 
@@ -19,9 +30,14 @@ async def start_bot() -> Optional[Application]:
         return None
 
     application = Application.builder().token(token).build()
+    # Order matters: command + callback handlers first; the catch-all message
+    # handler runs only when nothing more specific matched.
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^apv:"))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, owner_message_handler)
+    )
 
     await application.initialize()
     await application.start()
