@@ -3,8 +3,11 @@ from __future__ import annotations
 import logging
 
 from src.config import settings
+from src.instagram.schemas import InstagramInbound
 from src.shared.claude_runner import (
     CHAT_ALLOWED_TOOLS,
+    INSTAGRAM_ALLOWED_TOOLS,
+    INSTAGRAM_POST_ALLOWED_TOOLS,
     OWNER_ALLOWED_TOOLS,
     run_claude,
 )
@@ -15,6 +18,8 @@ logger = logging.getLogger("agent")
 _SALES_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "sales.md"
 _OWNER_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "owner_assistant.md"
 _CHAT_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "onsite_chat.md"
+_INSTAGRAM_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "instagram_dm.md"
+_INSTAGRAM_POST_PROMPT_PATH = settings.AGENT_DIR / "system_prompts" / "instagram_post.md"
 
 
 def _load_sales_prompt() -> str:
@@ -27,6 +32,14 @@ def _load_owner_prompt() -> str:
 
 def _load_chat_prompt() -> str:
     return _CHAT_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _load_instagram_prompt() -> str:
+    return _INSTAGRAM_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _load_instagram_post_prompt() -> str:
+    return _INSTAGRAM_POST_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 async def process_whatsapp_inbound(ib: WhatsAppInbound) -> dict:
@@ -86,6 +99,59 @@ End your final summary with one sentence describing what you did, then on its ow
 <the verbatim message body you sent via whatsapp_send — paste the text directly, no quote markers, no `>` prefixes>
 ```
 """
+
+
+async def process_instagram_inbound(ib: InstagramInbound) -> dict:
+    """Pass 1: handle a fresh Instagram DM."""
+    prompt = f"""{_load_instagram_prompt()}
+
+---
+
+Customer Instagram user id: {ib.sender}
+Inbound DM:
+\"\"\"{ib.message}\"\"\"
+
+Run the tool chain. Reply via mcp__happycake__instagram_send_dm to {ib.sender}.
+End your turn with one sentence summarizing what you did and what (if anything) needs human follow-up.
+"""
+    result = await run_claude(prompt, allowed_tools=INSTAGRAM_ALLOWED_TOOLS)
+    if result.get("is_error"):
+        logger.error("ig pass1 failed for id=%s: %s", ib.message_id, result.get("error"))
+    else:
+        logger.info("ig pass1 ok id=%s turns=%s", ib.message_id, result.get("num_turns"))
+    return result
+
+
+async def process_instagram_post_request(brief: str) -> dict:
+    """Owner-triggered IG post drafter & scheduler.
+
+    `brief` is the free-text the owner sent after `/post` in Telegram. The
+    agent has access to catalog/constraints/margin (read) plus
+    instagram_schedule_post / instagram_publish_post (write). It returns
+    its full claude result; the caller renders the verbatim caption back
+    into Telegram.
+    """
+    prompt = f"""{_load_instagram_post_prompt()}
+
+---
+
+The owner just sent you this brief in Telegram:
+\"\"\"{brief}\"\"\"
+
+Run the workflow. Schedule (or publish) the post. End your turn with the
+required output structure.
+"""
+    result = await run_claude(
+        prompt,
+        allowed_tools=INSTAGRAM_POST_ALLOWED_TOOLS,
+        max_turns=10,
+        timeout_seconds=180.0,
+    )
+    if result.get("is_error"):
+        logger.error("ig post draft failed: %s", result.get("error"))
+    else:
+        logger.info("ig post draft ok turns=%s", result.get("num_turns"))
+    return result
 
 
 async def process_chat_message(message: str, history: list[dict] | None = None) -> dict:

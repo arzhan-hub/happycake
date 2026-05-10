@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import settings
+from src.instagram.router import router as instagram_router
 from src.telegram_bot.runtime import start_bot, stop_bot
 from src.website.router import router as website_router
 from src.whatsapp.router import router as whatsapp_router
@@ -50,6 +51,7 @@ app.add_middleware(
 
 
 app.include_router(whatsapp_router)
+app.include_router(instagram_router)
 app.include_router(website_router)
 
 
@@ -62,6 +64,8 @@ async def root() -> dict:
         "endpoints": [
             "POST /webhooks/whatsapp",
             "GET  /webhooks/whatsapp/health",
+            "POST /webhooks/instagram",
+            "GET  /webhooks/instagram/health",
             "POST /api/orders",
             "POST /api/chat",
             "GET  /api/catalog",

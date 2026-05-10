@@ -34,12 +34,20 @@ See:
                   per-turn JSON              + brand prompt           whatsapp_send
 ```
 
-**Why dual-fanout?** The hosted simulator accepts a registered webhook URL but
-does not currently forward `whatsapp_inject_inbound` events to it (verified
-during discovery — see `MCP_DRY_RUN.md`). For demos and evaluator runs we use
-`scripts/demo_inbound.py` to drive both the simulator (so its state is
-correct) and our wrapper (so the agent processes the message) in parallel.
-The webhook endpoint stays in place for any future real-channel wiring.
+**How inbounds flow.** A call to `whatsapp_inject_inbound` (or `instagram_inject_dm`)
+on the hosted MCP forwards a Meta-shaped envelope to whatever URL we registered
+via `whatsapp_register_webhook` / `instagram_register_webhook` (header:
+`x-sbc-hackathon-source: mcp-forward`). The wrapper's `/webhooks/whatsapp` and
+`/webhooks/instagram` routers validate the envelope, write a copy to
+`evidence/webhooks/<channel>/`, and hand off to the agent. So the demo path
+needs the cloudflare tunnel up and the webhook registered with the **full path**
+(see *Manual smoke test* below). `scripts/demo_inbound.py` is a thin wrapper
+that just calls the inject tool — the simulator does the forwarding.
+
+> Earlier in development the simulator did not forward `inject_inbound` events
+> to registered webhooks; we worked around it with a parallel POST. That has
+> since been fixed on the simulator side, and the parallel POST has been
+> removed.
 
 ## Setup from a fresh clone
 
@@ -53,14 +61,23 @@ pip install -r requirements.txt
 cp .mcp.example.json .mcp.json
 # Edit .mcp.json: replace ${SBC_TOKEN} with your team's token from Steppe BC.
 
-# 3. Environment (optional for the wrapper-only path)
+# 3. Environment
 cp .env.example .env
-# Edit .env if you plan to use Telegram bots / a public tunnel.
+# Edit .env: at minimum set TELEGRAM_SALES_BOT_TOKEN if you want owner pushes.
+# PUBLIC_WEBHOOK_BASE_URL is filled in step 4 once the tunnel is up.
 
 # 4. Run the wrapper
 .venv/bin/uvicorn src.main:app --reload --port 8080
 
-# 5. Drive a fake customer turn (in another terminal)
+# 5. Public tunnel (required — the simulator forwards inbounds here)
+brew install cloudflared
+cloudflared tunnel --url http://localhost:8080 --no-autoupdate
+# Copy the printed https://*.trycloudflare.com URL into .env as PUBLIC_WEBHOOK_BASE_URL,
+# then register it with the simulator (full path matters):
+#   mcp__happycake__whatsapp_register_webhook  url=https://<sub>.trycloudflare.com/webhooks/whatsapp
+#   mcp__happycake__instagram_register_webhook url=https://<sub>.trycloudflare.com/webhooks/instagram
+
+# 6. Drive a fake customer turn (in another terminal)
 .venv/bin/python scripts/demo_inbound.py \
   --from +12679883724 \
   --message "Hi, do you have a whole honey cake today?"
@@ -68,22 +85,169 @@ cp .env.example .env
 
 Visit `http://localhost:8080/` for a list of endpoints.
 
-### Optional: public tunnel
+⚠️ Cloudflare quick-tunnel URLs rotate on every `cloudflared` restart —
+re-export `PUBLIC_WEBHOOK_BASE_URL` and re-call the `*_register_webhook` tools
+when you reconnect.
 
-Only needed if/when the simulator starts forwarding real webhooks, or to demo
-the public endpoint to the evaluator. Cloudflare quick-tunnels are easiest
-(no account required):
+## Telegram owner bot
+
+The wrapper pushes every customer turn (and approval requests) to one
+Telegram chat — the "owner". One bot = one chat.
+
+### One-time setup
+
+1. **Create the bot** with [@BotFather](https://t.me/BotFather): `/newbot`,
+   pick a name + username (e.g. `happycake_owner_bot`). BotFather replies
+   with a token like `8614103577:AAEm…`.
+2. **Put the token in `.env`**:
+   ```bash
+   TELEGRAM_SALES_BOT_TOKEN=8614103577:AAEm…
+   ```
+   Restart the wrapper so it reloads `.env`.
+3. **Capture your chat_id** by sending `/start` to your bot in the Telegram
+   app. The `cmd_start` handler (`src/telegram_bot/handlers.py:20`) writes
+   it to `state/owner_chat_id.txt`.
+   - Alternative: set `TELEGRAM_OWNER_CHAT_ID=<id>` in `.env` directly.
+   - Find your numeric id by messaging [@userinfobot](https://t.me/userinfobot).
+
+`load_owner_chat_id()` prefers the captured file, then falls back to the
+env var. If neither is set, `notify_owner` returns silently — the agent
+runs fine but Telegram pushes are skipped (`"send: no owner chat_id
+captured yet, skip"` at DEBUG).
+
+### What the bot can do
+
+| Trigger | Effect |
+|---|---|
+| `/start` (first time) | Registers the chat as owner. |
+| `/status` | Pulls a sandbox-state snapshot from the MCP `evaluator_get_evidence_summary` tool. |
+| `/post <brief>` | Drafts an Instagram caption from the brief, schedules (or publishes) it via `instagram_schedule_post` / `instagram_publish_post`, and replies in chat with the verbatim caption. Example: `/post Mother's Day weekend — push pre-orders for the whole honey cake`. |
+| Free-text message | Routed to the **owner-assistant** agent (read-only MCP tools, see `OWNER_ALLOWED_TOOLS` in `claude_runner.py`). |
+| Inbound WhatsApp turn lands | Wrapper formats the customer turn + agent reply and pushes via `notify_owner`. |
+| Inbound Instagram DM lands | Wrapper formats the IG turn + agent reply and pushes a *"📸 Instagram DM handled"* card. |
+| WhatsApp custom-work request | Wrapper detects `APPROVAL_NEEDED`, pushes the brief with inline **✅ Approve / ❌ Reject** buttons, and runs pass-2 on tap. |
+| Instagram custom-work request | Wrapper pushes the brief as an FYI (auto pass-2 reserved — owner follows up out-of-band). |
+| On-site chat escalation | When the chat agent emits `ESCALATE_TO_OWNER:<type>` (custom_order / complaint / order_problem), the wrapper pushes a brief to Telegram for the owner to follow up. |
+
+### Verify it's wired
 
 ```bash
-brew install cloudflared
-cloudflared tunnel --url http://localhost:8080 --no-autoupdate
-# Copy the printed https://*.trycloudflare.com URL.
-# Register it with the simulator:
-#   (call MCP tool whatsapp_register_webhook with that URL)
+# 1. Chat captured?
+cat state/owner_chat_id.txt        # → numeric chat_id
+
+# 2. Bot process up?
+ps aux | grep uvicorn | grep -v grep
+
+# 3. Trigger a turn and watch Telegram for the "✅ Customer turn handled" card.
 ```
 
-⚠️ Quick-tunnel URLs change on every restart — re-register if you stop and
-start `cloudflared`.
+## Manual smoke test (no demo driver)
+
+Useful when debugging the inbound → wrapper → agent → Telegram pipeline by
+hand. Assumes the wrapper is running on `localhost:8080`.
+
+### a. Health checks
+
+```bash
+curl -s http://localhost:8080/health                    # wrapper alive?
+curl -s http://localhost:8080/webhooks/whatsapp/health  # whatsapp router up?
+curl -s http://localhost:8080/webhooks/instagram/health # instagram router up?
+curl -s http://localhost:8080/api/health                # storefront API up?
+```
+
+### b. Verify the public tunnel
+
+```bash
+# tunnel must reach our local /webhooks/whatsapp/health
+curl -s https://<your-subdomain>.trycloudflare.com/webhooks/whatsapp/health
+# → {"ok":true,"channel":"whatsapp"}
+```
+
+### c. Register the webhook(s) with the simulator
+
+The MCP forwards inbounds to **exactly the URL you register** — including
+the path. Always include the channel-specific path:
+
+```text
+mcp__happycake__whatsapp_register_webhook
+  url = https://<your-subdomain>.trycloudflare.com/webhooks/whatsapp
+
+mcp__happycake__instagram_register_webhook
+  url = https://<your-subdomain>.trycloudflare.com/webhooks/instagram
+```
+
+(Registering only the host returned `webhook forward failed: undefined`
+because POST `/` returns 405 Method Not Allowed — see incident note in
+section *"Bare-host webhook bug"*.)
+
+### d. Inject an inbound and watch evidence land
+
+**WhatsApp:**
+```bash
+# Snapshot before
+ls evidence/webhooks/whatsapp/ | wc -l
+ls evidence/turns/12679883724/ 2>/dev/null | wc -l
+
+# Inject via MCP tool whatsapp_inject_inbound:
+#   from    = +12679883724
+#   message = "Hi! How much is a pistachio roll?"
+# Expected response: "forwarded to webhook (status 200)".
+
+# Watch the turn evidence (pass-1 takes ~20–30s):
+until [ "$(ls evidence/turns/12679883724/ 2>/dev/null | wc -l)" -gt 0 ]; do sleep 2; done
+LATEST=$(ls -t evidence/turns/12679883724/*.json | head -1)
+python3 -c "import json; d=json.load(open('$LATEST'))['result']; \
+  print('is_error:', d.get('is_error'), '· turns:', d.get('num_turns'), \
+        '· dur_s:', round((d.get('duration_ms') or 0)/1000, 1)); \
+  print('---'); print(d.get('result'))"
+```
+
+**Instagram DM:**
+```bash
+# Inject via MCP tool instagram_inject_dm:
+#   from     = igtest_maria
+#   threadId = ig_thread_001
+#   message  = "Hi! How much is a whole honey cake?"
+
+# Watch the IG turn evidence:
+until [ -d evidence/turns/instagram/igtest_maria ] \
+   && [ "$(ls evidence/turns/instagram/igtest_maria 2>/dev/null | wc -l)" -gt 0 ]; do
+  sleep 2
+done
+LATEST=$(ls -t evidence/turns/instagram/igtest_maria/*.json | head -1)
+python3 -c "import json; d=json.load(open('$LATEST'))['result']; \
+  print('is_error:', d.get('is_error'), '· turns:', d.get('num_turns')); \
+  print(d.get('result'))"
+```
+
+If `is_error: false` and `state/owner_chat_id.txt` is set, both channels
+push their own card to Telegram — WhatsApp shows *"✅ Customer turn
+handled"*, IG shows *"📸 Instagram DM handled"*.
+
+### d2. On-site assistant (Saule) test script
+
+Hits `POST /api/chat` with five canonical scenarios required by the
+hackathon submission spec — consultation, custom order, complaint, status
+lookup, general question. Asserts the right `escalation_type` (or
+absence) and that replies cite catalog facts.
+
+```bash
+.venv/bin/python scripts/test_chat.py                       # all five
+.venv/bin/python scripts/test_chat.py --only complaint      # one path
+.venv/bin/python scripts/test_chat.py --base-url https://<tunnel>
+```
+
+Exit code is non-zero on any failure. Each scenario prints PASS/FAIL with
+the agent's reply and the captured `escalated` / `escalation_type` /
+`num_turns` / `duration_s` fields.
+
+### e. Bare-host webhook bug (incident note)
+
+Symptom: `whatsapp_inject_inbound` reports `webhook forward failed:
+undefined`, no entry under `evidence/webhooks/whatsapp/`, no turn evidence.
+Cause: webhook registered as the host only (`https://…trycloudflare.com`)
+without `/webhooks/whatsapp`. POST to `/` returns 405. Fix: re-register with
+the full path.
 
 ## Project layout
 

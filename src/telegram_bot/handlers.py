@@ -11,7 +11,12 @@ from telegram.ext import ContextTypes
 
 from src.config import settings
 from src.shared import approvals
-from src.shared.turn import run_approval_turn, run_owner_chat_turn, to_telegram_html
+from src.shared.turn import (
+    run_approval_turn,
+    run_instagram_post_turn,
+    run_owner_chat_turn,
+    to_telegram_html,
+)
 from src.telegram_bot.owner import load_owner_chat_id, save_owner_chat_id
 
 logger = logging.getLogger("telegram_bot")
@@ -52,6 +57,63 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"• audit calls: {counts.get('auditCalls', 0)}",
     ]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/post <brief>` — owner-triggered IG post drafter & scheduler.
+
+    The agent has access to catalog/constraints/margin (read) and
+    instagram_schedule_post / instagram_publish_post (write). It will
+    schedule by default; if the brief explicitly says "publish now" the
+    agent calls publish.
+    """
+    chat_id = update.effective_chat.id
+    if chat_id != load_owner_chat_id():
+        await update.message.reply_text("Not authorized.")
+        return
+
+    brief = " ".join(context.args or []).strip()
+    if not brief:
+        await update.message.reply_text(
+            "Usage: <code>/post &lt;brief&gt;</code>\n\n"
+            "Example: <code>/post Mother's Day weekend — push pre-orders for the whole honey cake</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    placeholder = await update.message.reply_text("📸 Drafting IG post…")
+    try:
+        result = await run_instagram_post_turn(brief)
+    except Exception as exc:
+        await placeholder.edit_text(f"⚠️ Crashed: {exc!r}")
+        return
+
+    if result.get("is_error"):
+        await placeholder.edit_text(
+            f"⚠️ Couldn't draft — {result.get('error', 'unknown error')}"
+        )
+        return
+
+    body = (result.get("result") or "").strip() or "(no draft)"
+    body_html = to_telegram_html(body)
+
+    meta_bits = []
+    if result.get("num_turns") is not None:
+        meta_bits.append(f"{result['num_turns']} turns")
+    if result.get("duration_ms") is not None:
+        meta_bits.append(f"{result['duration_ms']/1000:.1f}s")
+    meta = f"\n\n<i>({' · '.join(meta_bits)})</i>" if meta_bits else ""
+
+    final = (body_html + meta)[:4000]
+    try:
+        await placeholder.edit_text(final, parse_mode="HTML")
+    except TelegramError:
+        try:
+            await placeholder.edit_text(
+                body + ("\n\n" + " · ".join(meta_bits) if meta_bits else "")
+            )
+        except TelegramError as exc:
+            logger.warning("/post reply failed: %s", exc)
 
 
 async def owner_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -15,6 +15,7 @@ from src.config import settings
 from src.telegram_bot.app_state import get_app, set_app
 from src.telegram_bot.handlers import (
     approval_callback,
+    cmd_post,
     cmd_start,
     cmd_status,
     owner_message_handler,
@@ -34,6 +35,7 @@ async def start_bot() -> Optional[Application]:
     # handler runs only when nothing more specific matched.
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("status", cmd_status))
+    application.add_handler(CommandHandler("post", cmd_post))
     application.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^apv:"))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, owner_message_handler)

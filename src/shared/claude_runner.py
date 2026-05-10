@@ -10,7 +10,7 @@ from src.config import settings
 logger = logging.getLogger("claude_runner")
 
 
-# MCP tools the sales agent is allowed to call without per-turn approval.
+# MCP tools the WhatsApp sales agent is allowed to call without per-turn approval.
 # Read-only first, then writes. New write-tools must be added here explicitly.
 ALLOWED_TOOLS = [
     "mcp__happycake__square_list_catalog",
@@ -19,9 +19,41 @@ ALLOWED_TOOLS = [
     "mcp__happycake__kitchen_get_capacity",
     "mcp__happycake__kitchen_get_menu_constraints",
     "mcp__happycake__kitchen_create_ticket",
+    "mcp__happycake__kitchen_accept_ticket",
+    "mcp__happycake__kitchen_reject_ticket",
     "mcp__happycake__kitchen_list_tickets",
     "mcp__happycake__whatsapp_send",
     "mcp__happycake__whatsapp_list_threads",
+]
+
+
+# Owner-triggered Instagram post drafter — read-only catalog/constraints
+# plus IG post writes (schedule + publish). No DM tools, no Square write
+# tools — this agent only writes IG posts.
+INSTAGRAM_POST_ALLOWED_TOOLS = [
+    "mcp__happycake__square_list_catalog",
+    "mcp__happycake__kitchen_get_menu_constraints",
+    "mcp__happycake__kitchen_get_capacity",
+    "mcp__happycake__marketing_get_margin_by_product",
+    "mcp__happycake__instagram_schedule_post",
+    "mcp__happycake__instagram_publish_post",
+]
+
+
+# Instagram DM agent — same chain as WhatsApp, but writes go through
+# instagram_send_dm instead of whatsapp_send.
+INSTAGRAM_ALLOWED_TOOLS = [
+    "mcp__happycake__square_list_catalog",
+    "mcp__happycake__square_get_inventory",
+    "mcp__happycake__square_create_order",
+    "mcp__happycake__kitchen_get_capacity",
+    "mcp__happycake__kitchen_get_menu_constraints",
+    "mcp__happycake__kitchen_create_ticket",
+    "mcp__happycake__kitchen_accept_ticket",
+    "mcp__happycake__kitchen_reject_ticket",
+    "mcp__happycake__kitchen_list_tickets",
+    "mcp__happycake__instagram_send_dm",
+    "mcp__happycake__instagram_list_dm_threads",
 ]
 
 

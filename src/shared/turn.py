@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timezone
 
 from src.config import settings
+from src.instagram.schemas import InstagramInbound
 from src.shared import agent, approvals
 from src.telegram_bot import notifier
 from src.whatsapp.schemas import WhatsAppInbound
@@ -221,6 +222,88 @@ async def run_inbound_turn(ib: WhatsAppInbound) -> None:
         logger.warning("telegram push failed", exc_info=True)
 
 
+def _format_ig_pass1_message(ib: InstagramInbound, result: dict) -> str:
+    is_error = result.get("is_error", False)
+    err = result.get("error")
+    summary_html = to_telegram_html((result.get("result") or "").strip()) or "<i>(no summary)</i>"
+    head = "🛑 <b>IG agent error</b>" if is_error else "📸 <b>Instagram DM handled</b>"
+    lines = [
+        head,
+        "",
+        f"👤 <b>From IG:</b> <code>{_esc(ib.sender)}</code>",
+        f"💬 <b>Inbound:</b> {_esc(ib.message)}",
+        "",
+        "🤖 <b>Agent:</b>",
+        summary_html[:3000],
+    ]
+    if is_error and err:
+        lines.append("")
+        lines.append(f"⚠️ <b>Error:</b> <code>{_esc(err)}</code>")
+    meta = _format_meta_line(result)
+    if meta:
+        lines.append("")
+        lines.append(meta)
+    lines.append(f"📁 <i>evidence: turns/instagram/{_esc(ib.sender)}/{_esc(ib.message_id)}.json</i>")
+    return "\n".join(lines)
+
+
+def _format_ig_approval_request(ib: InstagramInbound, summary: str) -> str:
+    body = summary
+    marker = approvals.APPROVAL_MARKER
+    if marker in body:
+        body = body.split(marker, 1)[1].lstrip()
+    body_html = to_telegram_html(body)
+    return (
+        "⏳ <b>Approval needed — IG custom-work request</b>\n"
+        "\n"
+        f"👤 <b>From IG:</b> <code>{_esc(ib.sender)}</code>\n"
+        f"⬇️💬 <b>Inbound:</b> {_esc(ib.message)}\n"
+        "\n"
+        f"{body_html[:3500]}"
+    )
+
+
+async def run_instagram_inbound_turn(ib: InstagramInbound) -> None:
+    """Pass 1: run the IG DM agent for one fresh inbound."""
+    started = datetime.now(timezone.utc).isoformat()
+    try:
+        result = await agent.process_instagram_inbound(ib)
+    except Exception as exc:
+        logger.exception("ig pass1 crashed for %s", ib.message_id)
+        result = {"is_error": True, "error": f"crash: {exc!r}"}
+
+    out_path = _write_evidence(
+        kind=f"turns/instagram/{ib.sender}",
+        key=ib.message_id,
+        payload={
+            "started": started,
+            "finished": datetime.now(timezone.utc).isoformat(),
+            "inbound": ib.model_dump(),
+            "result": result,
+        },
+    )
+    logger.info("ig pass1 evidence -> %s", out_path)
+
+    summary = (result.get("result") or "").strip()
+
+    # IG approval gate: same APPROVAL_NEEDED marker. We persist the approval
+    # under the IG sender id; pass-2 reuses run_approval_turn semantics if
+    # we extend it later. For now, escalate the brief to Telegram only —
+    # custom IG orders will get the buttons but won't auto-execute pass-2
+    # (IG pass-2 will be added if scenarios demand it).
+    if not result.get("is_error") and approvals.detect_marker(summary):
+        try:
+            await notifier.notify_owner(_format_ig_approval_request(ib, summary))
+        except Exception:
+            logger.warning("ig approval push failed", exc_info=True)
+        return
+
+    try:
+        await notifier.notify_owner(_format_ig_pass1_message(ib, result))
+    except Exception:
+        logger.warning("ig telegram push failed", exc_info=True)
+
+
 _ESCALATE_RE = re.compile(r"ESCALATE_TO_OWNER:([a-z_]+)")
 
 
@@ -303,6 +386,34 @@ async def run_chat_turn(message: str, history: list[dict] | None = None) -> dict
         except Exception:
             logger.warning("escalation push failed", exc_info=True)
 
+    return result
+
+
+async def run_instagram_post_turn(brief: str) -> dict:
+    """Owner-triggered IG post.
+
+    Caller (Telegram /post handler) manages the placeholder UX. We persist
+    evidence under evidence/instagram_posts/<ts>.json.
+    """
+    started = datetime.now(timezone.utc).isoformat()
+    try:
+        result = await agent.process_instagram_post_request(brief)
+    except Exception as exc:
+        logger.exception("ig post crashed")
+        result = {"is_error": True, "error": f"crash: {exc!r}"}
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    out_path = _write_evidence(
+        kind="instagram_posts",
+        key=ts,
+        payload={
+            "started": started,
+            "finished": datetime.now(timezone.utc).isoformat(),
+            "brief": brief,
+            "result": result,
+        },
+    )
+    logger.info("ig post evidence -> %s", out_path)
     return result
 
 

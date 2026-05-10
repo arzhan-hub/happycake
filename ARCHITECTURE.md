@@ -98,13 +98,15 @@ Critical files:
 | `src/config.py` | pydantic-settings; reads `.env`; defines paths for state/, evidence/, agent/ |
 | `src/whatsapp/router.py` | `POST /webhooks/whatsapp` — accepts the Meta Cloud API envelope |
 | `src/whatsapp/schemas.py` | Pydantic models for the Meta envelope + canonical `WhatsAppInbound` |
-| `src/website/router.py` | `POST /api/orders`, `GET /api/catalog`, `GET /api/health` |
+| `src/instagram/router.py` | `POST /webhooks/instagram` — accepts the Messenger Platform envelope |
+| `src/instagram/schemas.py` | Pydantic models for the IG envelope + canonical `InstagramInbound` |
+| `src/website/router.py` | `POST /api/orders`, `GET /api/catalog`, `POST /api/chat`, `GET /api/health` |
 | `src/website/schemas.py` | Order request/response schemas |
 | `src/website/orders.py` | Catalog/constraints/capacity validation, decoration-keyword gate, write-ops |
 | `src/shared/mcp_client.py` | Minimal async JSON-RPC `call_tool(name, args)` against the hosted MCP |
 | `src/shared/claude_runner.py` | `run_claude(prompt)` — async subprocess `claude -p ... --output-format json` |
-| `src/shared/agent.py` | Loads `agent/system_prompts/sales.md`, builds Pass 1 / Pass 2 prompts |
-| `src/shared/turn.py` | High-level orchestration: run agent → evidence → Telegram push, branches into approval flow |
+| `src/shared/agent.py` | Loads `agent/system_prompts/{sales,instagram_dm,onsite_chat,owner_assistant}.md`, builds Pass 1 / Pass 2 / chat / IG prompts |
+| `src/shared/turn.py` | High-level orchestration: `run_inbound_turn` (WhatsApp), `run_instagram_inbound_turn` (IG), `run_chat_turn` (Saule), `run_owner_chat_turn`, `run_approval_turn` (Pass 2). Branches into approval / escalation flows. |
 | `src/shared/approvals.py` | Flat-JSON state for pending owner approvals |
 | `src/shared/raw_log.py` | Persists every webhook payload + headers to `evidence/webhooks/` |
 | `src/telegram_bot/runtime.py` | `python-telegram-bot` Application; long-polling lifecycle |
@@ -168,7 +170,35 @@ else:
   notifier.notify_owner(formatted msg)   → Telegram bot push
 ```
 
-### 3.2 Inbound — storefront order
+### 3.2 Inbound — Instagram DM
+
+```
+follower DMs simulated IG account
+  ↓ (sandbox-driven)
+mcp.instagram_inject_dm(...)
+  ↓ (server-side fan-out)
+POST <tunnel>/webhooks/instagram         ← Messenger Platform envelope
+  ↓
+src/instagram/router.instagram_webhook
+  • log_raw_webhook → evidence/webhooks/instagram/<ts>.json
+  • MetaInstagramWebhook.model_validate
+  • iter_inbounds yields canonical InstagramInbound
+  • background_task: run_instagram_inbound_turn(ib)
+```
+
+`run_instagram_inbound_turn` reuses the same orchestration shape as
+WhatsApp — runs `process_instagram_inbound` against
+`agent/system_prompts/instagram_dm.md`, persists evidence to
+`evidence/turns/instagram/<sender>/<mid>.json`, and pushes the agent
+summary to Telegram. Custom-work asks emit `APPROVAL_NEEDED` and the
+owner sees a brief in chat (FYI; IG pass-2 auto-execution is reserved
+work — pass-2 currently only runs for WhatsApp approvals).
+
+The IG agent uses a separate allowed-tools list (`INSTAGRAM_ALLOWED_TOOLS`
+in `claude_runner.py`) — same kitchen/Square write tools as WhatsApp,
+but `instagram_send_dm` instead of `whatsapp_send`.
+
+### 3.3 Inbound — storefront order
 
 ```
 storefront → POST <tunnel>/api/orders
@@ -188,7 +218,7 @@ src/website/orders.process_order:
   6. Persist evidence/website_orders/<order_id>.json
 ```
 
-### 3.3 Inbound — owner Telegram action
+### 3.4 Inbound — owner Telegram action
 
 ```
 owner taps [Approve] or [Reject] on a pending request
@@ -217,8 +247,9 @@ run_approval_turn:
 Each customer interaction may produce one or two `claude -p` calls.
 
 **Pass 1** — fired on every inbound. Reads `agent/system_prompts/sales.md`,
-appends customer context, runs the chain (catalog → constraints → capacity
-→ order or hold → reply → end-of-summary marker). Pass 1 may:
+appends customer context, runs the chain (catalog → inventory → constraints
+→ capacity → order or hold → accept/reject → reply → end-of-summary marker).
+Pass 1 may:
 
 - Reply directly via `whatsapp_send` and create order + ticket (non-custom).
 - Reply with a holding message via `whatsapp_send` and emit `APPROVAL_NEEDED`
@@ -240,7 +271,10 @@ every turn. Rules covered:
 
 - 8 hard brand rules (wordmark, cake-name quotes, English, emoji ≤ 3, no
   fabrication, sign as people, no DM redirect-to-channel, lead with action).
-- The 7-step tool chain.
+- The 10-step tool chain — including a `square_get_inventory` step right
+  after `square_list_catalog` so the agent distinguishes cabinet stock
+  (same-day pull) from bake capacity (net-new prep) and never promises
+  inventory it doesn't have.
 - The approval gate format (`APPROVAL_NEEDED` + structured Decision brief
   with consistent time units).
 - Soft rules (specifics over adjectives, lists past 4 sentences, etc.).
