@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+
+import httpx
+from telegram import Update
+from telegram.error import TelegramError
+from telegram.ext import ContextTypes
+
+from src.config import settings
+from src.shared import approvals
+from src.shared.turn import run_approval_turn
+from src.telegram_bot.owner import load_owner_chat_id, save_owner_chat_id
+
+logger = logging.getLogger("telegram_bot")
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    save_owner_chat_id(chat_id)
+    name = user.first_name if user else "friend"
+    await update.message.reply_text(
+        f"Hi {name} — registered chat {chat_id} as the HappyCake owner.\n\n"
+        "I'll forward every customer turn here. Use /status for a quick snapshot.\n\n"
+        "— the HappyCake team"
+    )
+
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if chat_id != load_owner_chat_id():
+        await update.message.reply_text("Not authorized.")
+        return
+
+    summary = await _fetch_evidence_summary()
+    if summary is None:
+        await update.message.reply_text("Couldn't reach the MCP — check SBC_TOKEN.")
+        return
+
+    counts = summary.get("counts", {})
+    lines = [
+        "*HappyCake — current sandbox state*",
+        f"• whatsapp inbound: {counts.get('whatsappInbound', 0)}",
+        f"• whatsapp outbound: {counts.get('whatsappOutbound', 0)}  _(simulator counter, see MCP_DRY_RUN.md)_",
+        f"• square orders: {counts.get('squareOrders', 0)}",
+        f"• kitchen tickets: {counts.get('kitchenTickets', 0)}",
+        f"• marketing campaigns: {counts.get('marketingCampaigns', 0)}",
+        f"• gbusiness reviews: {counts.get('gbusinessReviews', 0)}",
+        f"• audit calls: {counts.get('auditCalls', 0)}",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler for [Approve] / [Reject] inline button taps."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    if chat_id != load_owner_chat_id():
+        await query.answer("Not authorized.", show_alert=True)
+        return
+
+    data = (query.data or "").split(":")
+    if len(data) != 3 or data[0] != "apv":
+        await query.answer("Invalid action.", show_alert=True)
+        return
+    _, approval_id, decision_short = data
+    decision = "approved" if decision_short == "a" else "rejected"
+
+    state = approvals.get(approval_id)
+    if state is None:
+        await query.answer("Approval not found.", show_alert=True)
+        return
+    if state.get("status") != "pending":
+        await query.answer(f"Already {state['status']}.", show_alert=True)
+        return
+
+    state = approvals.update_status(approval_id, decision)
+    await query.answer(f"Marked {decision}. Pass 2 starting.")
+
+    new_text = (query.message.text or "") + f"\n\nDecision: {decision}"
+    try:
+        await query.edit_message_text(new_text)
+    except TelegramError:
+        pass
+
+    asyncio.create_task(run_approval_turn(state))
+
+
+async def _fetch_evidence_summary() -> dict | None:
+    mcp_path = settings.MCP_CONFIG_PATH
+    if not mcp_path.exists():
+        return None
+    cfg = json.loads(mcp_path.read_text())["mcpServers"]["happycake"]
+    headers = {
+        **cfg.get("headers", {}),
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "evaluator_get_evidence_summary", "arguments": {}},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(cfg["url"], headers=headers, json=body)
+        if r.status_code != 200:
+            return None
+        result = r.json().get("result", {})
+        for item in result.get("content", []):
+            if item.get("type") == "text":
+                try:
+                    return json.loads(item["text"])
+                except json.JSONDecodeError:
+                    continue
+        return None
+    except Exception as exc:
+        logger.warning("evidence summary fetch failed: %s", exc)
+        return None
