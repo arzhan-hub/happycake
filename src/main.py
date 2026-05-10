@@ -4,9 +4,11 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import settings
 from src.telegram_bot.runtime import start_bot, stop_bot
+from src.website.router import router as website_router
 from src.whatsapp.router import router as whatsapp_router
 
 
@@ -28,9 +30,27 @@ async def lifespan(app: FastAPI):
     await stop_bot()
 
 
-app = FastAPI(title="HappyCake Wrapper", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="HappyCake Wrapper", version="0.3.0", lifespan=lifespan)
+
+
+# CORS for the storefront (running on a different device / origin).
+_origins_raw = settings.WEBSITE_CORS_ORIGINS.strip()
+if _origins_raw == "*" or not _origins_raw:
+    cors_origins = ["*"]
+else:
+    cors_origins = [o.strip() for o in _origins_raw.split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
 
 app.include_router(whatsapp_router)
+app.include_router(website_router)
 
 
 @app.get("/")
@@ -42,6 +62,9 @@ async def root() -> dict:
         "endpoints": [
             "POST /webhooks/whatsapp",
             "GET  /webhooks/whatsapp/health",
+            "POST /api/orders",
+            "GET  /api/catalog",
+            "GET  /api/health",
         ],
     }
 

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
 
     CLAUDE_BIN: str = "claude"
 
+    WEBSITE_CORS_ORIGINS: str = "*"  # comma-separated, e.g. "http://localhost:3000,https://happycake.us"
+
     PROJECT_ROOT: Path = PROJECT_ROOT
     STATE_DIR: Path = PROJECT_ROOT / "state"
     EVIDENCE_DIR: Path = PROJECT_ROOT / "evidence"
